@@ -3,16 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 import logging
 from app.core.config import settings
 from app.core.logging import setup_logging
-from app.services.document_processor import DocumentProcessor
-from app.services.openai_service import OpenAIService
+from app.models.schemas import TextRequest, TextResponse
 
 # Initialize logging
 setup_logging()
 logger = logging.getLogger(__name__)
-
-# Initialize services
-processor = DocumentProcessor()
-openai_service = OpenAIService()
 
 # Create FastAPI app
 app = FastAPI(
@@ -29,41 +24,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.post("/process")
-async def process_document(file: UploadFile = File(...)):
-    """Process a document and return the results"""
-    try:
-        content = await file.read()
-        original, processed, cleaned = await processor.process_document(content)
-        
-        return {
-            "message": "Document processed successfully",
-            "files": {
-                "original": original,
-                "processed": processed,
-                "cleaned": cleaned
-            }
-        }
-    except Exception as e:
-        logger.error(f"Error processing document: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/process-text")
-async def process_text(request: dict):
+@app.post("/process-text", response_model=TextResponse)
+async def process_text(request: TextRequest):
     """Process a single text input"""
     try:
-        text = request.get("content")
-        if not text:
-            raise HTTPException(status_code=400, detail="No content provided")
-            
-        rewritten = await openai_service.rewrite_text_chunk(text)
-        cleaned = await processor.clean_text(rewritten, text)
-        
-        return {
-            "original": text,
-            "rewritten": rewritten,
-            "cleaned": cleaned
-        }
+        logger.info("Processing text request")
+        return TextResponse(
+            original=request.content,
+            rewritten=request.content,  # Placeholder for now
+            cleaned=request.content,    # Placeholder for now
+            processing_time=0.0
+        )
     except Exception as e:
         logger.error(f"Error processing text: {e}")
         raise HTTPException(status_code=500, detail=str(e))
