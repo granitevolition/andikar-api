@@ -1,8 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 from app.core.config import settings
 from app.core.logging import setup_logging
+from app.api.v1 import document  # importing existing document router
 
 # Initialize logging
 setup_logging()
@@ -21,6 +22,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# Include routers
+app.include_router(
+    document.router,
+    prefix=f"{settings.API_V1_STR}/documents",
+    tags=["documents"]
 )
 
 @app.get("/")
