@@ -1,11 +1,23 @@
-from fastapi import FastAPI, Request, UploadFile, File, HTTPException
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 import time
 from app.core.config import settings
 from app.core.logging import setup_logging
-from app.models.schemas import TextRequest, TextResponse
 from app.services.openai_service import OpenAIService
+from pydantic import BaseModel
+from typing import Optional
+
+# Schema definitions
+class TextRequest(BaseModel):
+    content: str
+    style: Optional[str] = "scholar"
+
+class TextResponse(BaseModel):
+    original: str
+    rewritten: str
+    cleaned: str
+    processing_time: float
 
 # Initialize logging
 setup_logging()
