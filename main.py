@@ -11,12 +11,30 @@ from fastapi.middleware.base import BaseHTTPMiddleware
 import asyncio
 from datetime import datetime, timedelta
 
-# Keep existing schema definitions
-# [Previous schema definitions remain the same...]
+# Schema definitions
+class TextRequest(BaseModel):
+    content: str
+    style: Optional[str] = "scholar"
+
+class TextResponse(BaseModel):
+    original: str
+    rewritten: str
+    cleaned: str
+    processing_time: float
+
+class ParagraphRequest(BaseModel):
+    text: str
+    style: Optional[str] = "scholar"
+    min_paragraph_length: Optional[int] = 100
+
+class ParagraphResponse(BaseModel):
+    paragraphs: List[TextResponse]
+    total_paragraphs: int
+    processing_time: float
 
 # Add rate limiting implementation
 class RateLimiter:
-    def __init__(self, requests_per_minute: int = 10):
+    def __init__(self, requests_per_minute: int = 100):
         self.requests_per_minute = requests_per_minute
         self.requests = {}
 
@@ -75,8 +93,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# [Keep existing endpoints...]
-# Add rate limit info endpoint
 @app.get("/rate-limit-status")
 async def rate_limit_status(request: Request):
     """Get current rate limit status"""
@@ -94,7 +110,80 @@ async def rate_limit_status(request: Request):
         "remaining_requests": max(0, rate_limiter.requests_per_minute - recent_requests)
     }
 
-[Your existing endpoints remain the same...]
+@app.post("/process-text", response_model=TextResponse)
+async def process_text(request: TextRequest):
+    """Process a single text input"""
+    try:
+        start_time = time.time()
+        logger.info("Processing single text request")
+        
+        rewritten = await openai_service.rewrite_text_chunk(
+            request.content,
+            style=request.style
+        )
+        
+        processing_time = time.time() - start_time
+        
+        return TextResponse(
+            original=request.content,
+            rewritten=rewritten,
+            cleaned=rewritten,
+            processing_time=processing_time
+        )
+    except Exception as e:
+        logger.error(f"Error processing text: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/process-paragraphs", response_model=ParagraphResponse)
+async def process_paragraphs(request: ParagraphRequest):
+    """Process text by paragraphs"""
+    try:
+        start_time = time.time()
+        logger.info("Processing text by paragraphs")
+
+        # Split text into paragraphs (split by double newline)
+        paragraphs = [p.strip() for p in request.text.split("\n\n") if p.strip()]
+        
+        # Filter paragraphs by minimum length if specified
+        paragraphs = [p for p in paragraphs if len(p) >= request.min_paragraph_length]
+
+        results = []
+        for paragraph in paragraphs:
+            try:
+                para_start_time = time.time()
+                rewritten = await openai_service.rewrite_text_chunk(
+                    paragraph,
+                    style=request.style
+                )
+                
+                results.append(TextResponse(
+                    original=paragraph,
+                    rewritten=rewritten,
+                    cleaned=rewritten,
+                    processing_time=time.time() - para_start_time
+                ))
+            except Exception as e:
+                logger.error(f"Error processing paragraph: {e}")
+                continue
+
+        total_time = time.time() - start_time
+        
+        return ParagraphResponse(
+            paragraphs=results,
+            total_paragraphs=len(results),
+            processing_time=total_time
+        )
+    except Exception as e:
+        logger.error(f"Error in paragraph processing: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/")
+async def root():
+    return {"message": "API is running"}
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
 
 if __name__ == "__main__":
     import uvicorn
