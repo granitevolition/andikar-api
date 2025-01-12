@@ -7,7 +7,6 @@ from pydantic import BaseModel
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.services.openai_service import OpenAIService
-from fastapi.middleware.base import BaseHTTPMiddleware
 import asyncio
 from datetime import datetime, timedelta
 
@@ -32,44 +31,40 @@ class ParagraphResponse(BaseModel):
     total_paragraphs: int
     processing_time: float
 
-# Add rate limiting implementation
+# Rate limiter as a dependency
 class RateLimiter:
-    def __init__(self, requests_per_minute: int = 100):
-        self.requests_per_minute = requests_per_minute
+    def __init__(self):
         self.requests = {}
+        self.CALLS = 10
+        self.RATE_TIME = 60  # 1 minute
 
-    async def check_rate_limit(self, client_ip: str) -> bool:
-        now = datetime.now()
-        minute_ago = now - timedelta(minutes=1)
-
-        # Clean old requests
-        self.requests = {k: v for k, v in self.requests.items() 
-                        if v[-1] > minute_ago}
-
-        # Get or create client requests list
-        client_requests = self.requests.get(client_ip, [])
-        client_requests = [t for t in client_requests if t > minute_ago]
-
-        # Check rate limit
-        if len(client_requests) >= self.requests_per_minute:
-            return False
-
-        # Add new request
-        client_requests.append(now)
-        self.requests[client_ip] = client_requests
-        return True
-
-rate_limiter = RateLimiter()
-
-class RateLimitMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
+    async def is_rate_limited(self, request: Request) -> bool:
         client_ip = request.client.host
-        if not await rate_limiter.check_rate_limit(client_ip):
-            raise HTTPException(
-                status_code=429,
-                detail="Rate limit exceeded. Please try again in a minute."
-            )
-        return await call_next(request)
+        now = time.time()
+        
+        # Initialize or get client's request history
+        if client_ip not in self.requests:
+            self.requests[client_ip] = []
+        
+        # Clean old requests
+        self.requests[client_ip] = [req_time for req_time in self.requests[client_ip] 
+                                  if now - req_time < self.RATE_TIME]
+        
+        # Check if rate limit is exceeded
+        if len(self.requests[client_ip]) >= self.CALLS:
+            return True
+            
+        self.requests[client_ip].append(now)
+        return False
+
+limiter = RateLimiter()
+
+async def rate_limit(request: Request):
+    if await limiter.is_rate_limited(request):
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Please try again in a minute."
+        )
 
 # Initialize services
 setup_logging()
@@ -80,9 +75,6 @@ app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
-
-# Add rate limiting middleware
-app.add_middleware(RateLimitMiddleware)
 
 # Add CORS middleware
 app.add_middleware(
@@ -97,20 +89,26 @@ app.add_middleware(
 async def rate_limit_status(request: Request):
     """Get current rate limit status"""
     client_ip = request.client.host
-    now = datetime.now()
-    minute_ago = now - timedelta(minutes=1)
+    now = time.time()
     
-    # Get recent requests
-    client_requests = rate_limiter.requests.get(client_ip, [])
-    recent_requests = len([t for t in client_requests if t > minute_ago])
+    if client_ip not in limiter.requests:
+        return {
+            "requests_in_last_minute": 0,
+            "max_requests_per_minute": limiter.CALLS,
+            "remaining_requests": limiter.CALLS
+        }
+    
+    # Clean and count recent requests
+    recent_requests = [req_time for req_time in limiter.requests[client_ip] 
+                      if now - req_time < limiter.RATE_TIME]
     
     return {
-        "requests_in_last_minute": recent_requests,
-        "max_requests_per_minute": rate_limiter.requests_per_minute,
-        "remaining_requests": max(0, rate_limiter.requests_per_minute - recent_requests)
+        "requests_in_last_minute": len(recent_requests),
+        "max_requests_per_minute": limiter.CALLS,
+        "remaining_requests": max(0, limiter.CALLS - len(recent_requests))
     }
 
-@app.post("/process-text", response_model=TextResponse)
+@app.post("/process-text", response_model=TextResponse, dependencies=[Depends(rate_limit)])
 async def process_text(request: TextRequest):
     """Process a single text input"""
     try:
@@ -134,7 +132,7 @@ async def process_text(request: TextRequest):
         logger.error(f"Error processing text: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/process-paragraphs", response_model=ParagraphResponse)
+@app.post("/process-paragraphs", response_model=ParagraphResponse, dependencies=[Depends(rate_limit)])
 async def process_paragraphs(request: ParagraphRequest):
     """Process text by paragraphs"""
     try:
