@@ -1,13 +1,18 @@
 from fastapi import FastAPI, Request, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+import time
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.models.schemas import TextRequest, TextResponse
+from app.services.openai_service import OpenAIService
 
 # Initialize logging
 setup_logging()
 logger = logging.getLogger(__name__)
+
+# Initialize services
+openai_service = OpenAIService()
 
 # Create FastAPI app
 app = FastAPI(
@@ -28,12 +33,22 @@ app.add_middleware(
 async def process_text(request: TextRequest):
     """Process a single text input"""
     try:
+        start_time = time.time()
         logger.info("Processing text request")
+        
+        # Process the text using OpenAI
+        rewritten = await openai_service.rewrite_text_chunk(
+            request.content,
+            style=request.style
+        )
+        
+        processing_time = time.time() - start_time
+        
         return TextResponse(
             original=request.content,
-            rewritten=request.content,  # Placeholder for now
-            cleaned=request.content,    # Placeholder for now
-            processing_time=0.0
+            rewritten=rewritten,
+            cleaned=rewritten,  # For now, using rewritten as cleaned
+            processing_time=processing_time
         )
     except Exception as e:
         logger.error(f"Error processing text: {e}")
